@@ -57,9 +57,12 @@
         </div>
         
         <form action="/add" method="POST" class="controls">
-            <input type="text" name="item" placeholder="What did you buy?" required>
+            <input type="text" id="itemInput" name="item" placeholder="What did you buy?" required>
+            <div id="categoryPrediction" style="display:none; padding: 8px; background: var(--accent-color); color: white; border-radius: 6px; font-size: 0.9em; cursor: pointer;" onclick="applySuggestion()">
+                Suggested: <span id="predictionText"></span> <span id="confidenceText"></span>
+            </div>
             <input type="number" step="0.01" name="amount" placeholder="Amount (₹)" required>
-            <input type="text" name="category" placeholder="Category (e.g. Food, Gym)" required>
+            <input type="text" id="categoryInput" name="category" placeholder="Category (e.g. Food, Gym)" required>
             <input type="date" name="date" placeholder="Date (optional - uses today if blank)">
             <button type="submit">Add Entry</button>
         </form>
@@ -107,6 +110,8 @@
     </div>
 
     <script>
+        let lastPrediction = null;
+
         function initTheme() {
             const savedTheme = localStorage.getItem('theme') || 'dark';
             document.documentElement.classList.toggle('light-mode', savedTheme === 'light');
@@ -124,6 +129,47 @@
         function updateThemeButton(theme) {
             const button = document.getElementById('themeToggle');
             button.textContent = theme === 'dark' ? '☀️ Light' : '🌙 Dark';
+        }
+
+        // Predict category based on item input
+        document.getElementById('itemInput').addEventListener('input', async function() {
+            const itemValue = this.value.trim();
+            const predictionDiv = document.getElementById('categoryPrediction');
+            
+            if (itemValue.length < 2) {
+                predictionDiv.style.display = 'none';
+                return;
+            }
+            
+            try {
+                const response = await fetch('/predict', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ item: itemValue })
+                });
+                
+                const data = await response.json();
+                
+                if (data.category && data.confidence > 0.4) {
+                    lastPrediction = data.category;
+                    document.getElementById('predictionText').textContent = data.category;
+                    document.getElementById('confidenceText').textContent = `(${(data.confidence * 100).toFixed(0)}%)`;
+                    predictionDiv.style.display = 'block';
+                } else {
+                    predictionDiv.style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Error getting prediction:', error);
+            }
+        });
+
+        function applySuggestion() {
+            if (lastPrediction) {
+                document.getElementById('categoryInput').value = lastPrediction;
+                document.getElementById('categoryPrediction').style.display = 'none';
+            }
         }
 
         // Initialize theme on page load
