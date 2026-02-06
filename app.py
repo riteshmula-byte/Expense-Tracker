@@ -1,5 +1,6 @@
 from flask import Flask, render_template, request, redirect, url_for
 import sqlite3
+from datetime import datetime
 
 app = Flask(__name__)
 
@@ -50,7 +51,7 @@ def add():
     amount = float(request.form['amount'])
     # User can type their own category now
     category = request.form['category'].strip().capitalize()
-    date = request.form['date']
+    date = request.form.get('date') or datetime.now().strftime('%Y-%m-%d')
     
     with sqlite3.connect('database.db') as conn:
         conn.execute('INSERT INTO expenses (item, amount, category, date) VALUES (?, ?, ?, ?)', 
