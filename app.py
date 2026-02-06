@@ -9,9 +9,11 @@ warnings.filterwarnings('ignore')
 app = Flask(__name__)
 DATABASE = 'database.db'
 
-# Initialize the zero-shot classifier (works immediately without training)
-# This is a pre-trained model that can classify text into any categories
+# Pre-load the model
 classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
+
+# These are your "Master Categories" to keep things organized
+DEFAULT_CATEGORIES = ["Food", "Transport", "Entertainment", "Shopping", "Bills", "Health", "Education", "Utilities", "Groceries", "Gym"]
 
 def init_db():
     with sqlite3.connect(DATABASE) as conn:
@@ -19,38 +21,36 @@ def init_db():
                         (id INTEGER PRIMARY KEY AUTOINCREMENT, 
                          item TEXT, amount REAL, category TEXT, date TEXT)''')
 
-def get_common_categories():
-    """Get categories from recent expenses or default ones"""
+def get_clean_categories():
+    """Returns a unique, title-cased list of categories from the DB + Defaults"""
     try:
         with sqlite3.connect(DATABASE) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT DISTINCT category FROM expenses ORDER BY category LIMIT 15")
-            categories = [row[0] for row in cursor.fetchall()]
-        
-        if len(categories) >= 5:
-            return categories
+            # Get unique categories from DB
+            cursor.execute("SELECT DISTINCT category FROM expenses")
+            db_cats = [row[0].strip().title() for row in cursor.fetchall() if row[0]]
+            
+            # Combine with defaults and remove duplicates
+            combined = list(set(db_cats + DEFAULT_CATEGORIES))
+            return sorted(combined)
     except:
-        pass
-    
-    # Default expense categories for zero-shot classification
-    return ["Food", "Transport", "Entertainment", "Shopping", "Bills", "Health", "Education", "Utilities", "Groceries", "Gym"]
+        return DEFAULT_CATEGORIES
 
 def predict_category(item_name):
-    """Use zero-shot classification to predict category immediately"""
     try:
-        categories = get_common_categories()
+        # We tell the AI to ONLY choose from our existing clean list
+        candidate_labels = get_clean_categories()
         
-        # Use the pre-trained model to classify
-        result = classifier(item_name, categories, multi_class=False)
+        # ML Prediction
+        result = classifier(item_name, candidate_labels, multi_class=False)
         
         if result and result['labels']:
-            top_category = result['labels'][0]
-            confidence = result['scores'][0]
-            
-            return {"category": top_category, "confidence": float(confidence)}
+            return {
+                "category": result['labels'][0], 
+                "confidence": float(result['scores'][0])
+            }
     except Exception as e:
-        print(f"Prediction Error: {e}")
-    
+        print(f"ML Error: {e}")
     return None
 
 @app.route('/')
@@ -65,13 +65,9 @@ def index():
         query += " WHERE category = ?"
         params.append(cat_filter)
 
-    # Sorting Logic
-    if sort_by == 'high':
-        query += " ORDER BY amount DESC"
-    elif sort_by == 'low':
-        query += " ORDER BY amount ASC"
-    else:
-        query += " ORDER BY date DESC"
+    if sort_by == 'high': query += " ORDER BY amount DESC"
+    elif sort_by == 'low': query += " ORDER BY amount ASC"
+    else: query += " ORDER BY date DESC"
 
     with sqlite3.connect(DATABASE) as conn:
         conn.row_factory = sqlite3.Row
@@ -79,16 +75,17 @@ def index():
         cursor.execute(query, params)
         rows = cursor.fetchall()
         
-        cursor.execute("SELECT DISTINCT category FROM expenses")
-        categories = [r['category'] for r in cursor.fetchall()]
+        # Use the helper to get the filter list
+        categories = get_clean_categories()
         total = sum(row['amount'] for row in rows)
 
     return render_template('index.html', expenses=rows, total=total, categories=categories)
 
 @app.route('/add', methods=['POST'])
 def add():
-    item = request.form['item']
+    item = request.form['item'].strip()
     amount = float(request.form['amount'])
+    # Force Category to Title Case to prevent "food" vs "Food"
     category = request.form['category'].strip().title()
     date = request.form.get('date') or datetime.now().strftime('%Y-%m-%d')
     
@@ -103,12 +100,13 @@ def predict():
     data = request.get_json()
     item_name = data.get('item', '').strip()
     
-    if not item_name:
+    if not item_name or len(item_name) < 3:
         return jsonify({"category": None})
     
     result = predict_category(item_name)
-    # Zero-shot classifier works even with lower confidence
-    if result and result['confidence'] > 0.3:
+    
+    # Check if AI is confident enough
+    if result and result['confidence'] > 0.35:
         return jsonify(result)
     
     return jsonify({"category": None})
